@@ -262,6 +262,37 @@ class engine:
 
     def on_config_change(self, menu_id, id, **kwargs):
 
+        for cfg_id, cfg in self.config_data.items():
+            if cfg_id == id and menu_id == cfg['menu']:
+                # Store value
+                cfg['container'][id] = kwargs['value']
+                break
+
+        # Re-calculate dependencies and update configs accordingly
+        for cfg_id, cfg in self.config_data.items():
+            # Touch only current menu
+            if menu_id == cfg['menu'] and 'depends_on' in cfg['data']:
+                if self.eval_depends(cfg['data']['depends_on']):
+                    if cfg['hidden']:
+                        # Activate previously hidden config
+                        type = cfg['data']['type']
+                        description = cfg['data']['description']
+                        if type == 'enum':
+                            values = cfg['data']['values']
+                            self.ui_instance.create_config(menu_id, cfg_id,
+                                'enum', description=description, values=values)
+                        elif type == 'integer':
+                            self.ui_instance.create_config(menu_id, cfg_id,
+                                'integer', description=description)
+
+                        cfg['hidden'] = False
+
+                else:
+                    if not cfg['hidden']:
+                        # Deactivate (delete) config
+                        self.ui_instance.delete_config(menu_id, cfg_id)
+                        cfg['hidden'] = True
+
         return
 
     def populate_menu(self, p_menu_id, menu_id, menu_params, output_obj):
@@ -269,18 +300,24 @@ class engine:
             if k.startswith('config-'):
                 # Initialize empty config, later UI will publish changes to it
                 output_obj[k] = {}
-                self.config_data[k] = { 'data': v, 'menu': menu_id, 'out': output_obj }
 
-        for k, v in menu_params.items():
-            if k.startswith('config-'):
-                type = v['type']
+                # Configuration field can't be hidden, in case if it is depends
+                # on some other property
+                self.config_data[k] = { 'data': v, 'menu': menu_id, 'container': output_obj, 'hidden': True }
 
-                if type == 'enum':
-                    self.ui_instance.create_config(menu_id, k,
-                        'enum', description=v['description'], values=v['values'])
-                elif type == 'integer':
-                    self.ui_instance.create_config(menu_id, k,
-                        'integer', description=v['description'])
+                # Do not add config that depends on some conditions.
+                # Configuration will be added in on_config_change() routine
+                if not 'depends_on' in v:
+                    type = v['type']
+
+                    if type == 'enum':
+                        self.ui_instance.create_config(menu_id, k,
+                            'enum', description=v['description'], values=v['values'])
+                    elif type == 'integer':
+                        self.ui_instance.create_config(menu_id, k,
+                            'integer', description=v['description'])
+
+                    self.config_data[k]['hidden'] = False
 
             elif k.startswith('menu-'):
                 new_menu_id = menu_id + '/' + k
@@ -289,6 +326,30 @@ class engine:
 
                 output_obj[k] = {}
                 self.populate_menu(menu_id, new_menu_id, v, output_obj[k])
+
+    # Helper routine to get dict value using path
+    def get_json_val(self, dict_arg, path):
+        val=dict_arg
+        for it in path.split('/')[1:]:
+            val=val[it]
+
+        return val
+
+    # Evaluates "depends" expression
+    def eval_depends(self, depends_str):
+        try:
+            s=re.search('(.*?)\s+(==|!=|>=|<=|>|<)\s+(.*)', depends_str)
+            val=self.get_json_val(self.output_cfg, s[1])
+
+            # To let string be processed in eval() without errors,
+            # it should be captured in quotes
+            if type(val) is str:
+                val='\'' + val + '\''
+
+            expr=str(val) + s[2] + s[3]
+            return eval(expr)
+        except:
+            return False
 
 #-------------------------------------------------------------------------------
 
@@ -400,7 +461,11 @@ class npyscreen_ui(abstract_ui):
             if data['last_value'] != data['option'].value:
                 data['last_value'] = data['option'].value
                 # Report one config at a time
-                self.engine.on_config_change(f_id, id, value=data['option'].value)
+                value=data['option'].value
+                if data['type'] == 'enum':
+                    # Normalize a value
+                    value=value[0]
+                self.engine.on_config_change(f_id, id, value=value)
                 return
 
         self.update_form(f_id)
