@@ -56,8 +56,8 @@ params_json=json.loads('''{
                 "key": "config-channel",
                 "items": {
                     "config-channel": {
-                        "type": "string",
-                        "pattern": "^US?ART\\\d$"
+                        "type": "enum",
+                        "values": [ "UART0", "UART1", "UART2" ]
                     },
                     "config-baud": {
                         "type": "integer",
@@ -250,7 +250,7 @@ class abstract_ui(abc.ABC):
 class engine:
     def __init__(self, ui_instance):
         self.ui_instance = ui_instance
-        self.config_data = {}
+        self.items_data = {}
         self.config_params = params_json
         self.output_cfg = cfg_json
 
@@ -258,74 +258,145 @@ class engine:
         root_menu_id = 'MAIN'
         self.ui_instance.set_engine(self)
         self.ui_instance.create_menu(None, root_menu_id, 'Welcome to theCore configurator')
-        self.populate_menu(None, root_menu_id, self.config_params, self.output_cfg)
+        self.process_menu(None, root_menu_id, self.config_params, self.output_cfg)
 
     def on_config_change(self, menu_id, id, **kwargs):
-
-        for cfg_id, cfg in self.config_data.items():
-            if cfg_id == id and menu_id == cfg['menu']:
+        for k, v in self.items_data.items():
+            if k == id and v['item_type'] == 'config' and menu_id == v['menu']:
                 # Store value
-                cfg['container'][id] = kwargs['value']
+                normalized_cfg_name = v['name']
+                v['container'][normalized_cfg_name] = kwargs['value']
                 break
 
-        # Re-calculate dependencies and update configs accordingly
-        for cfg_id, cfg in self.config_data.items():
-            # Touch only current menu
-            if menu_id == cfg['menu'] and 'depends_on' in cfg['data']:
-                if self.eval_depends(cfg['data']['depends_on']):
-                    if cfg['hidden']:
-                        # Activate previously hidden config
-                        type = cfg['data']['type']
-                        description = cfg['data']['description']
-                        if type == 'enum':
-                            values = cfg['data']['values']
-                            self.ui_instance.create_config(menu_id, cfg_id,
-                                'enum', description=description, values=values)
-                        elif type == 'integer':
-                            self.ui_instance.create_config(menu_id, cfg_id,
-                                'integer', description=description)
+        # Re-calculate and update menu accordingly
 
-                        cfg['hidden'] = False
+        p_menu = self.items_data[menu_id]['p_menu']
+        menu_params = self.items_data[menu_id]['data']
+        normalized_name = self.items_data[menu_id]['name']
+        output_obj = self.items_data[menu_id]['container'][normalized_name]
 
-                else:
-                    if not cfg['hidden']:
-                        # Deactivate (delete) config
-                        self.ui_instance.delete_config(menu_id, cfg_id)
-                        cfg['hidden'] = True
-
+        self.process_menu(p_menu, menu_id, menu_params, output_obj)
         return
 
-    def populate_menu(self, p_menu_id, menu_id, menu_params, output_obj):
+    # Processes menu, creating and deleting configurations when needed
+    def process_menu(self, p_menu_id, menu_id, menu_params, output_obj):
+        # Internal helper to find item by normalized key
+        def is_created(name):
+            for k, v in self.items_data.items():
+                if v['name'] == name:
+                    return True
+
+            return False
+
         for k, v in menu_params.items():
+            if not k.startswith('config-') and not k.startswith('menu-'):
+                continue # Skip not interested fields
+
+            # Possible ways to handle items
+            create_item = 0
+            skip_item = 1
+            delete_item = 2
+
+            decision = None
+
+            # Is item has a dependency?
+            if 'depends_on' in v:
+                # Is dependency satisfied?
+                if self.eval_depends(v['depends_on']):
+                    # Is item created?
+                    if is_created(k):
+                        # item is already created, nothing to do
+                        decision = skip_item
+                    else:
+                        # New item should be created
+                        decision = create_item
+                else:
+                    # Dependency is not satisfied - item shouldn't
+                    # be displayed.
+
+                    # Is item created?
+                    if is_created(k):
+                        # Item must be deleted, if present.
+                        decision = delete_item
+                    else:
+                        # No item present, nothing to delete
+                        decision = skip_item
+            else:
+                # Item is dependless. Meaning should be displayed
+                # no matter what.
+
+                # Is item created?
+                if is_created(k):
+                    # item is already created, nothing to do
+                    decision = skip_item
+                else:
+                    # New item should be created
+                    decision = create_item
+
             if k.startswith('config-'):
-                # Initialize empty config, later UI will publish changes to it
-                output_obj[k] = {}
+                # Create, skip, delete config
 
-                # Configuration field can't be hidden, in case if it is depends
-                # on some other property
-                self.config_data[k] = { 'data': v, 'menu': menu_id, 'container': output_obj, 'hidden': True }
-
-                # Do not add config that depends on some conditions.
-                # Configuration will be added in on_config_change() routine
-                if not 'depends_on' in v:
+                if decision == create_item:
                     type = v['type']
 
+                    # Initialize empty config, later UI will publish
+                    # changes to it
+                    output_obj[k] = {}
+
+                    # No backslash at the end means it is a config
+                    new_config_id = menu_id + '/' + k
+
+                    self.items_data[new_config_id] = {
+                        'item_type': 'config',
+                        'name': k,
+                        'data': v,
+                        'p_menu': p_menu_id,
+                        'menu': menu_id,
+                        'container': output_obj
+                    }
+
                     if type == 'enum':
-                        self.ui_instance.create_config(menu_id, k,
-                            'enum', description=v['description'], values=v['values'])
+                        self.ui_instance.create_config(menu_id, new_config_id,
+                            'enum', description=v['description'],
+                            values=v['values'])
                     elif type == 'integer':
-                        self.ui_instance.create_config(menu_id, k,
+                        self.ui_instance.create_config(menu_id, new_config_id,
                             'integer', description=v['description'])
 
-                    self.config_data[k]['hidden'] = False
+                elif decision == delete_item:
+                    # Configuration must be deleted, if present.
+                    self.ui_instance.delete_config(menu_id, k)
+                    output_obj.pop(k, None)
+                    self.items_data.pop(k, None)
+
+                elif decision == skip_item:
+                    pass # Nothing to do
 
             elif k.startswith('menu-'):
-                new_menu_id = menu_id + '/' + k
-                self.ui_instance.create_menu(menu_id, new_menu_id,
-                    description=v['description'])
+                # Create, skip, delete menu
+                if decision == create_item:
+                    new_menu_id = menu_id + '/' + k + '/'
+                    self.ui_instance.create_menu(menu_id, new_menu_id,
+                        description=v['description'])
 
-                output_obj[k] = {}
-                self.populate_menu(menu_id, new_menu_id, v, output_obj[k])
+                    output_obj[k] = {}
+                    self.items_data[new_menu_id] = {
+                        'item_type': 'menu',
+                        'name': k,
+                        'data': v,
+                        'p_menu': menu_id,
+                        'container': output_obj
+                    }
+
+                    self.process_menu(menu_id, new_menu_id, v, output_obj[k])
+
+                elif decision == delete_item:
+                    self.ui_instance.delete_menu(menu_id)
+                    output_obj.pop(k, None)
+                    self.items_data.pop(k, None)
+
+                elif decision == skip_item:
+                    pass # Nothing to do
 
     # Helper routine to get dict value using path
     def get_json_val(self, dict_arg, path):
@@ -437,7 +508,7 @@ class npyscreen_ui(abstract_ui):
 
     def delete_config(self, menu_id, id):
         self.menu_forms[menu_id]['config_fields'].pop(id, None)
-        pass
+        self.update_form(menu_id)
 
     ''' Private method, updates form '''
     def update_form(self, f_id):
