@@ -517,13 +517,20 @@ class npyscreen_ui(abstract_ui):
                     name='<<< Back to ', value=p_menu_id, app=f.parentApp),
             ]
 
+            self.update_form(p_menu_id)
+
     def delete_menu(self, menu_id):
         # Delete all links to this form
         for f_id, f_data in self.menu_forms.items():
             f_data['nav_link'] = \
                 [ nav for nav in f_data['nav_link'] if nav.target_form != menu_id ]
 
+        # Update parent form afterwards
+        parent = self.menu_forms[menu_id]['parent']
+
+        self.menu_forms.pop(menu_id, None)
         self.npyscreen_app.removeForm(menu_id)
+        self.update_form(parent)
 
     def create_config(self, menu_id, id, type, description, long_description=None, **kwargs):
         self.menu_forms[menu_id]['config_fields'][id] = {
