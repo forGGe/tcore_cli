@@ -391,9 +391,22 @@ class engine:
                     self.process_menu(menu_id, new_menu_id, v, output_obj[k])
 
                 elif decision == delete_item:
-                    self.ui_instance.delete_menu(menu_id)
-                    output_obj.pop(k, None)
-                    self.items_data.pop(k, None)
+                    # Delete menu first
+                    target_menu_id = menu_id + '/' + k + '/'
+                    target_container = self.items_data[target_menu_id]['container']
+                    target_container.pop(k, None)
+
+                    self.ui_instance.delete_menu(target_menu_id)
+                    self.items_data.pop(target_menu_id, None)
+
+                    # TODO: sanitize menus (challenge: root menu don't have p_menu_id)
+
+                    # Sanitize all configs: delete configuration without menu
+                    to_delete = [ item_id for item_id, item_v in self.items_data.items() \
+                        if item_v['item_type'] == 'config' and not item_v['menu'] in self.items_data ]
+                    for k in to_delete:
+                        del self.items_data[k]
+
 
                 elif decision == skip_item:
                     pass # Nothing to do
@@ -505,7 +518,12 @@ class npyscreen_ui(abstract_ui):
             ]
 
     def delete_menu(self, menu_id):
-        pass
+        # Delete all links to this form
+        for f_id, f_data in self.menu_forms.items():
+            f_data['nav_link'] = \
+                [ nav for nav in f_data['nav_link'] if nav.target_form != menu_id ]
+
+        self.npyscreen_app.removeForm(menu_id)
 
     def create_config(self, menu_id, id, type, description, long_description=None, **kwargs):
         self.menu_forms[menu_id]['config_fields'][id] = {
