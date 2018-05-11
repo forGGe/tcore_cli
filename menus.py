@@ -409,7 +409,7 @@ class engine:
     # Evaluates "depends" expression
     def eval_depends(self, depends_str):
         try:
-            s=re.search('(.*?)\s+(==|!=|>=|<=|>|<)\s+(.*)', depends_str)
+            s=re.search(r'(.*?)\s+(==|!=|>=|<=|>|<)\s+(.*)', depends_str)
             val=self.get_json_val(self.output_cfg, s[1])
 
             # To let string be processed in eval() without errors,
@@ -432,6 +432,17 @@ class switch_form_btn(npyscreen.MiniButtonPress):
 
     def whenPressed(self):
         self.parent.parentApp.switchForm(self.target_form)
+
+class npyscreen_switch_form_option(npyscreen.OptionFreeText):
+    def __init__(self, *args, **kwargs):
+        self.target_form=kwargs['target_form']
+        self.app=kwargs['app']
+        kwargs.pop('target_form', None)
+        kwargs.pop('app', None)
+        super().__init__(*args, **kwargs)
+
+    def change_option(self):
+        self.app.switchForm(self.target_form)
 
 class npyscreen_multiline(npyscreen.MultiLineAction):
     def __init__(self, *args, **kwargs):
@@ -468,14 +479,6 @@ class npyscreen_ui(abstract_ui):
         f = self.npyscreen_app.addForm(menu_id, npyscreen_form,
             name=description, my_f_id=menu_id, ui=self)
 
-        if p_menu_id:
-            # Add navigation between forms
-            self.menu_forms[p_menu_id]['form'].add(switch_form_btn,
-                name='>>> Go to {}'.format(menu_id), target_form=menu_id)
-
-            f.add(switch_form_btn,
-                name='<<< Back to {}'.format(p_menu_id), target_form=p_menu_id)
-
         ms = f.add(npyscreen.OptionListDisplay, name="Option List",
                 values = npyscreen.OptionList().options,
                 scroll_exit=True,
@@ -484,6 +487,22 @@ class npyscreen_ui(abstract_ui):
         self.menu_forms[menu_id] = { 'parent': p_menu_id, 'form': f, 'config_widget': ms }
         # Empty configuration dict, will be populated in create_config() function
         self.menu_forms[menu_id]['config_fields'] = {}
+        self.menu_forms[menu_id]['nav_link'] = []
+
+        if p_menu_id:
+            self.menu_forms[p_menu_id]['nav_link'].append(
+                npyscreen_switch_form_option(target_form=menu_id,
+                    name='>>> Go to ', value=menu_id, app=f.parentApp),
+            )
+
+            # self.menu_forms[p_menu_id]['nav_link'].append(
+            #     npyscreen.OptionFreeText('FreeText', value='', documentation="This is some documentation.")
+            # )
+
+            self.menu_forms[menu_id]['nav_link'] = [
+                npyscreen_switch_form_option(target_form=p_menu_id,
+                    name='<<< Back to ', value=p_menu_id, app=f.parentApp),
+            ]
 
     def delete_menu(self, menu_id):
         pass
@@ -517,6 +536,9 @@ class npyscreen_ui(abstract_ui):
 
         for id, data in self.menu_forms[f_id]['config_fields'].items():
             options.append(data['option'])
+
+        for link in self.menu_forms[f_id]['nav_link']:
+            options.append(link)
 
         self.menu_forms[f_id]['config_widget'].values = options
 
